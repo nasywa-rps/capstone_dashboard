@@ -1,0 +1,35 @@
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.sqlite3
+*.db
+
+# === Virtual environment ===
+venv/
+.env/
+.venv/
+env/
+ENV/
+*.env
+
+# === Streamlit secrets ===
+.streamlit/secrets.toml
+
+# === OS files ===
+.DS_Store
+Thumbs.db
+
+# === Logs and cache ===
+*.log
+*.tmp
+.cache/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+
+# === VS Code ===
+.vscode/
+.settings/
