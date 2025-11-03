@@ -6,9 +6,6 @@ from datetime import timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 
-# Add tlsAllowInvalidCertificates=true to bypass SSL issue
-COSMOSDB_CONN_STRING = "mongodb://nasywa:fDUUROuxtmygDhKYJJkpthWfDObUZHJP8ZyIyQc5WhIfCiDJvZW42vPaZInQ4kYgGlV65qZYsUVgACDbAi5KGQ==@nasywa.mongo.cosmos.azure.com:10255/?ssl=true&replicaSet=globaldb&retrywrites=false&maxIdleTimeMS=120000&appName=@nasywa@&tlsAllowInvalidCertificates=true"
-
 # Page config with custom theme
 st.set_page_config(
     page_title="Helmet Detection Dashboard",
@@ -65,7 +62,7 @@ st.markdown("<p style='text-align: center; color: #7f8c8d; font-size: 16px;'>Mon
 
 # Connect to database
 try:
-    client = MongoClient(COSMOSDB_CONN_STRING)
+    client = MongoClient(st.secrets["COSMOSDB_CONN_STRING"])
     collection = client["image_database"]["image_metadata"]
     
     # Get stats
