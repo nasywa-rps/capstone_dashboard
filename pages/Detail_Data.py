@@ -2,12 +2,12 @@ import streamlit as st
 from pymongo import MongoClient
 import pandas as pd
 import datetime
-from datetime import timedelta
-import plotly.express as px
-import plotly.graph_objects as go
+from PIL import Image
+from io import BytesIO
+from azure.storage.blob import BlobServiceClient
 
 st.set_page_config(
-    page_title="Helmet Detection Dashboard | Analitik",
+    page_title="Helmet Detection Dashboard | Detail Data",
     layout="wide",
     page_icon="logo.png",
     initial_sidebar_state="collapsed"
@@ -30,249 +30,306 @@ with st.sidebar:
 
 # ===== END LOGIN CHECK =====
 
-# Custom CSS for compact layout
+# Custom CSS for layout
 st.markdown("""
     <style>
-    /* Compact layout - fit everything on one page */
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 1rem !important;
-        max-width: 100%;
     }
     
     .main {
         padding: 0rem 1rem;
     }
     
-    .stMetric {
-        background-color: #f0f2f6;
-        padding: 10px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    /* Table styling */
+    .dataframe {
+        font-size: 13px;
     }
     
-    .stMetric label {
-        color: #31333F !important;
-        font-size: 0.9rem !important;
+    /* Detail panel styling */
+    .detail-panel {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        border: 2px solid #dee2e6;
+        height: 100%;
     }
     
-    .stMetric [data-testid="stMetricValue"] {
-        color: #0e1117 !important;
-        font-size: 1.5rem !important;
+    .detail-label {
+        font-weight: 600;
+        color: #495057;
+        margin-top: 10px;
     }
     
-    .stMetric [data-testid="stMetricDelta"] {
-        color: #31333F !important;
-        font-size: 0.85rem !important;
+    .detail-value {
+        color: #212529;
+        margin-bottom: 8px;
+    }
+    
+    /* Status badges */
+    .status-compliant {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-weight: 600;
+    }
+    
+    .status-violation {
+        background-color: #f8d7da;
+        color: #721c24;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-weight: 600;
     }
     
     h1 {
         color: #1f77b4;
-        padding-bottom: 10px;
-        font-size: 1.8rem !important;
+        font-size: 2rem !important;
+        margin-bottom: 1rem;
     }
     
     h2 {
         color: #2c3e50;
-        padding-top: 5px;
-        padding-bottom: 5px;
         font-size: 1.3rem !important;
-    }
-    
-    /* Reduce spacing between elements */
-    .element-container {
-        margin-bottom: 0.5rem !important;
-    }
-    
-    hr {
-        margin: 0.5rem 0 !important;
+        margin-top: 0.5rem;
+        margin-bottom: 0.5rem;
     }
     </style>
 """, unsafe_allow_html=True)
 
 
-# Connect to database
-try:
-    client = MongoClient(st.secrets["COSMOSDB_CONN_STRING"])
+# Title
+st.title("📋 Detail Data Deteksi Helm")
+
+
+# ===== DATABASE CONNECTION =====
+@st.cache_resource
+def init_connection():
+    return MongoClient(st.secrets["COSMOSDB_CONN_STRING"])
+
+
+@st.cache_resource
+def init_blob_client():
+    """Initialize Azure Blob Storage client with authentication"""
+    return BlobServiceClient.from_connection_string(
+        st.secrets["AZURE_STORAGE_CONNECTION_STRING"]
+    )
+
+
+@st.cache_data(ttl=30)
+def get_all_records(status_filter="Semua", date_filter=None):
+    """Fetch all records with filters"""
+    client = init_connection()
     collection = client["image_database"]["image_metadata"]
     
-    # Get stats
-    total = collection.count_documents({})
-    processed = collection.count_documents({"processed": True})
+    # Build query
+    query = {}
     
-    # Support both old and new schema
-    helmet = collection.count_documents({
-        "$or": [
-            {"helmet_status": "helmet"},
-            {"helmet_status": "compliant"}
-        ]
-    })
-    no_helmet = collection.count_documents({
-        "$or": [
-            {"helmet_status": "no_helmet"},
-            {"helmet_status": "violation"}
-        ]
-    })
+    # Status filter
+    if status_filter == "Patuh (Pakai Helm)":
+        query["helmet_status"] = {"$in": ["helmet", "compliant"]}
+    elif status_filter == "Melanggar (Tidak Pakai Helm)":
+        query["helmet_status"] = {"$in": ["no_helmet", "violation"]}
     
-    # Calculate compliance rate
-    compliance_rate = (helmet / processed * 100) if processed > 0 else 0
-    violation_rate = (no_helmet / processed * 100) if processed > 0 else 0
+    # Date filter
+    if date_filter:
+        start_date = datetime.datetime.combine(date_filter, datetime.time.min)
+        end_date = datetime.datetime.combine(date_filter, datetime.time.max)
+        query["uploaded_at"] = {"$gte": start_date, "$lte": end_date}
+    
+    # Fetch data WITHOUT sorting (CosmosDB requires index for sort)
+    records = list(collection.find(query).limit(500))
+    
+    # Sort in Python by uploaded_at
+    records_sorted = sorted(
+        records, 
+        key=lambda x: x.get('uploaded_at', datetime.datetime.min),
+        reverse=True
+    )
+    
+    return records_sorted
 
 
-    # === ROW 1: PIE CHART & GAUGE (COMPACT) ===
-    st.subheader("📊 Analisis Kepatuhan")
-    
-    col_chart1, col_chart2 = st.columns([1, 1])
-    
-    with col_chart1:
-        if processed > 0:
-            # Compact Pie Chart
-            fig_pie = go.Figure(data=[go.Pie(
-                labels=['Patuh (Pakai Helm)', 'Melanggar (Tidak Pakai Helm)'],
-                values=[helmet, no_helmet],
-                hole=0.4,
-                marker=dict(colors=['#2ecc71', '#e74c3c']),
-                textinfo='label+percent',
-                textfont=dict(size=11)
-            )])
-            
-            fig_pie.update_layout(
-                title=dict(text="Distribusi Kepatuhan", font=dict(size=14)),
-                showlegend=True,
-                height=250,  # Reduced from 350
-                margin=dict(t=40, b=10, l=10, r=10),
-                legend=dict(font=dict(size=10))
-            )
-            
-            st.plotly_chart(fig_pie, use_container_width=True)
-        else:
-            st.info("Belum ada data untuk ditampilkan")
-    
-    with col_chart2:
-        if processed > 0:
-            # Compact Gauge Chart
-            fig_gauge = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=compliance_rate,
-                domain={'x': [0, 1], 'y': [0, 1]},
-                title={'text': "Tingkat Kepatuhan", 'font': {'size': 14}},
-                number={'suffix': '%', 'font': {'size': 30}},
-                gauge={
-                    'axis': {'range': [None, 100], 'ticksuffix': '%', 'tickfont': {'size': 10}},
-                    'bar': {'color': "#2ecc71" if compliance_rate >= 80 else "#f39c12" if compliance_rate >= 60 else "#e74c3c"},
-                    'steps': [
-                        {'range': [0, 60], 'color': "#ffe6e6"},
-                        {'range': [60, 80], 'color': "#fff8e6"},
-                        {'range': [80, 100], 'color': "#e6ffe6"}
-                    ],
-                    'threshold': {
-                        'line': {'color': "red", 'width': 3},
-                        'thickness': 0.75,
-                        'value': 80
-                    }
-                }
-            ))
-            
-            fig_gauge.update_layout(
-                height=250,  # Reduced from 350
-                margin=dict(t=40, b=10, l=10, r=10)
-            )
-            
-            st.plotly_chart(fig_gauge, use_container_width=True)
-        else:
-            st.info("Belum ada data untuk ditampilkan")
-    
-    st.markdown("---")
-    
-    # === ROW 2: TREND ANALYSIS (COMPACT) ===
-    st.subheader("📈 Trend & Analisis Temporal")
-    
-    # Get all violators with timestamps
-    violators = list(collection.find({
-        "$or": [
-            {"helmet_status": "no_helmet"},
-            {"helmet_status": "violation"}
-        ]
-    }))
-    
-    if len(violators) > 0:
-        df_violators = pd.DataFrame(violators)
+def load_image_from_blob(blob_url):
+    """Load image from Azure Blob Storage with authentication"""
+    try:
+        # Get blob client
+        blob_service_client = init_blob_client()
         
-        if 'processed_at' in df_violators.columns:
-            df_violators['processed_at'] = pd.to_datetime(df_violators['processed_at'])
-            df_violators['date'] = df_violators['processed_at'].dt.date
-            df_violators['hour'] = df_violators['processed_at'].dt.hour
-            
-            col_trend1, col_trend2 = st.columns([2, 1])
-            
-            with col_trend1:
-                # Compact Daily trend
-                daily_violations = df_violators.groupby('date').size().reset_index(name='count')
-                
-                fig_trend = px.line(
-                    daily_violations,
-                    x='date',
-                    y='count',
-                    title='Trend Pelanggaran Harian',
-                    labels={'date': 'Tanggal', 'count': 'Jumlah Pelanggar'},
-                    markers=True
-                )
-                
-                fig_trend.update_traces(
-                    line=dict(color='#e74c3c', width=2),
-                    marker=dict(size=6)
-                )
-                
-                fig_trend.update_layout(
-                    height=250,  # Reduced from 400
-                    hovermode='x unified',
-                    showlegend=False,
-                    margin=dict(t=40, b=40, l=40, r=10),
-                    title=dict(font=dict(size=14)),
-                    xaxis=dict(title=dict(font=dict(size=11)), tickfont=dict(size=10)),
-                    yaxis=dict(title=dict(font=dict(size=11)), tickfont=dict(size=10))
-                )
-                
-                st.plotly_chart(fig_trend, use_container_width=True)
-            
-            with col_trend2:
-                # Compact Hourly distribution
-                hourly_violations = df_violators.groupby('hour').size().reset_index(name='count')
-                
-                fig_hour = px.bar(
-                    hourly_violations,
-                    x='hour',
-                    y='count',
-                    title='Distribusi per Jam',
-                    labels={'hour': 'Jam', 'count': 'Jumlah'},
-                    color='count',
-                    color_continuous_scale='Reds'
-                )
-                
-                fig_hour.update_layout(
-                    height=250,  # Reduced from 400
-                    showlegend=False,
-                    xaxis=dict(tickmode='linear', dtick=3, title=dict(font=dict(size=11)), tickfont=dict(size=10)),
-                    yaxis=dict(title=dict(font=dict(size=11)), tickfont=dict(size=10)),
-                    margin=dict(t=40, b=40, l=40, r=10),
-                    title=dict(font=dict(size=14))
-                )
-                
-                st.plotly_chart(fig_hour, use_container_width=True)
-        else:
-            st.warning("Data timestamp tidak tersedia untuk analisis trend")
-    else:
-        st.info("Belum ada data pelanggaran")
-    
-    # === COMPACT FOOTER ===
-    st.markdown("---")
-    footer_col1, footer_col2 = st.columns([1, 1])
-    with footer_col1:
-        st.caption(f"🕐 Terakhir diperbarui: {datetime.datetime.now().strftime('%d %B %Y, %H:%M:%S')}")
-    with footer_col2:
-        st.caption("💾 Data source: Azure CosmosDB")
+        # Extract container and blob name from URL
+        # Example URL: https://storagetugas.blob.core.windows.net/photo/photo_20251113_171531_427061.jpg
+        parts = blob_url.split('/')
+        container_name = parts[-2]  # 'photo'
+        blob_name = parts[-1]        # 'photo_20251113_171531_427061.jpg'
+        
+        # Get blob client for specific blob
+        blob_client = blob_service_client.get_blob_client(
+            container=container_name,
+            blob=blob_name
+        )
+        
+        # Download blob data
+        blob_data = blob_client.download_blob().readall()
+        
+        # Convert to PIL Image
+        img = Image.open(BytesIO(blob_data))
+        return img
+    except Exception as e:
+        st.error(f"Error loading image: {str(e)}")
+        return None
 
+
+# ===== FILTERS =====
+with st.expander("🔍 Filter Data", expanded=True):
+  col_filter1, col_filter2, col_filter3 = st.columns([2, 2, 1])
+
+with col_filter1:
+    status_filter = st.selectbox(
+        "Status Kepatuhan",
+        ["Semua", "Patuh (Pakai Helm)", "Melanggar (Tidak Pakai Helm)"],
+        index=0
+    )
+
+with col_filter2:
+    date_filter = st.date_input(
+        "Filter Tanggal",
+        value=None,
+        help="Kosongkan untuk melihat semua tanggal"
+    )
+
+with col_filter3:
+    if st.button("🔄 Refresh Data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+st.markdown("---")
+
+
+# ===== MAIN LAYOUT: TABLE (3/4) + DETAIL PANEL (1/4) =====
+try:
+    # Fetch data
+    records = get_all_records(
+        status_filter=status_filter,
+        date_filter=date_filter if date_filter else None
+    )
+    
+    if len(records) > 0:
+        # Convert to DataFrame
+        df = pd.DataFrame(records)
+        
+        # Prepare display columns
+        df['No'] = range(1, len(df) + 1)
+        
+        # Format datetime
+        if 'uploaded_at' in df.columns:
+            df['Tanggal'] = pd.to_datetime(df['uploaded_at']).dt.strftime('%Y-%m-%d')
+            df['Waktu'] = pd.to_datetime(df['uploaded_at']).dt.strftime('%H:%M:%S')
+        else:
+            df['Tanggal'] = 'N/A'
+            df['Waktu'] = 'N/A'
+        
+        # Status mapping
+        df['Status'] = df['helmet_status'].apply(
+            lambda x: 'Patuh ✅' if x in ['helmet', 'compliant'] else 'Melanggar ❌'
+        )
+        
+        # Format confidence rate (as percentage)
+        if 'confidence' in df.columns:
+            df['Confidence'] = df['confidence'].apply(
+                lambda x: f"{x*100:.1f}%" if pd.notna(x) else 'N/A'
+            )
+        else:
+            df['Confidence'] = 'N/A'
+        
+        # Display columns with confidence
+        display_df = df[['No', 'Tanggal', 'Waktu', 'filename', 'Confidence', 'Status']].copy()
+        display_df.columns = ['No', 'Tanggal', 'Waktu', 'Nama File', 'Confidence', 'Status']
+        
+        # Create two columns: Table (3/4) and Detail Panel (1/4)
+        col_table, col_detail = st.columns([3, 1])
+        
+        with col_table:
+            st.subheader(f"📊 Data Kendaraan ({len(records)} data)")
+            
+            # Display table with selection
+            selected_indices = st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                height=820,
+                on_select="rerun",
+                selection_mode="single-row"
+            )
+            
+            # Get selected row
+            if selected_indices and len(selected_indices['selection']['rows']) > 0:
+                selected_idx = selected_indices['selection']['rows'][0]
+                st.session_state['selected_record'] = records[selected_idx]
+        
+        with col_detail:
+            st.subheader("🔍 Detail Informasi")
+            
+            if 'selected_record' in st.session_state and st.session_state['selected_record']:
+                record = st.session_state['selected_record']
+                
+                # Display image with authenticated access
+                if 'url' in record or 'blob_url' in record:
+                    img_url = record.get('url') or record.get('blob_url')
+                    
+                    with st.spinner('Memuat gambar...'):
+                        img = load_image_from_blob(img_url)
+                        if img:
+                            st.image(img, use_container_width=True)
+                        else:
+                            st.warning("⚠️ Gambar tidak dapat dimuat")
+                
+                # Status
+                status = record.get('helmet_status', 'unknown')
+                if status in ['helmet', 'compliant']:
+                    st.markdown('<div class="status-compliant">✅ PATUH</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="status-violation">❌ MELANGGAR</div>', unsafe_allow_html=True)
+                
+                st.markdown("---")
+                
+                # Details
+                st.markdown(f"**📁 Nama File:**")
+                st.text(record.get('filename', 'N/A'))
+                
+                st.markdown(f"**📅 Tanggal & Waktu:**")
+                if 'uploaded_at' in record:
+                    upload_time = pd.to_datetime(record['uploaded_at'])
+                    st.text(upload_time.strftime('%d %B %Y'))
+                    st.text(upload_time.strftime('%H:%M:%S'))
+                else:
+                    st.text('N/A')
+                
+                st.markdown(f"**🎯 Confidence Rate:**")
+                confidence = record.get('confidence', None)
+                if confidence is not None:
+                    st.text(f"{confidence*100:.1f}%")
+                else:
+                    st.text('N/A')
+                
+                st.markdown(f"**🔗 URL Gambar:**")
+                img_url = record.get('url') or record.get('blob_url', 'N/A')
+                if img_url != 'N/A':
+                    st.text_input("", img_url, label_visibility="collapsed", disabled=True)
+                else:
+                    st.text('N/A')
+                
+                st.markdown(f"**🆔 Database ID:**")
+                st.code(str(record.get('_id', 'N/A')), language=None)
+            
+            else:
+                st.info("👈 Pilih baris dari tabel untuk melihat detail")
+    
+    else:
+        st.warning("⚠️ Tidak ada data yang sesuai dengan filter")
+        st.info("Coba ubah filter atau refresh data")
 
 except Exception as e:
-    st.error(f"⚠️ Terjadi kesalahan koneksi database: {str(e)}")
+    st.error(f"⚠️ Terjadi kesalahan: {str(e)}")
     st.info("Pastikan koneksi database tersedia dan credentials benar.")
