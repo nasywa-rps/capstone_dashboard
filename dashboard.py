@@ -7,6 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from PIL import Image
 import hashlib
+import extra_streamlit_components as stx
 
 # Page config with custom theme
 st.set_page_config(
@@ -16,11 +17,18 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ===== LOGIN SYSTEM =====
+# ===== COOKIE MANAGER FOR PERSISTENT LOGIN =====
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
+
+# ===== LOGIN SYSTEM WITH COOKIES =====
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# Users dictionary (you can also move this to secrets.toml)
+# Users dictionary
 USERS = {
     "admin": hash_password("admin123"),
     "user": hash_password("user123"),
@@ -30,17 +38,32 @@ USERS = {
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = None
+    
+    # Try to restore from cookie
+    cookies = cookie_manager.get_all()
+    if cookies and 'username' in cookies:
+        username = cookies.get('username')
+        if username in USERS:
+            st.session_state.logged_in = True
+            st.session_state.username = username
 
 def logout():
     st.session_state.logged_in = False
     st.session_state.username = None
+    # Delete cookie
+    cookie_manager.delete('username')
     st.rerun()
 
-def login(username, password):
+def login(username, password, remember_me=True):
     hashed_pw = hash_password(password)
     if username in USERS and USERS[username] == hashed_pw:
         st.session_state.logged_in = True
         st.session_state.username = username
+        
+        # Save to cookie if remember_me is checked
+        if remember_me:
+            cookie_manager.set('username', username, expires_at=datetime.datetime.now() + timedelta(days=30))
+        
         return True
     return False
 
@@ -51,13 +74,6 @@ if not st.session_state.logged_in:
         .block-container {
             padding-top: 3rem !important;
             max-width: 450px !important;
-        }
-        .login-box {
-            background-color: #f8f9fa;
-            padding: 1.5rem;
-            border-radius: 15px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-bottom: 1rem;
         }
         .stButton>button {
             width: 100%;
@@ -82,16 +98,15 @@ if not st.session_state.logged_in:
     st.markdown("<h1 style='text-align: center; color: #1f77b4;'>🔐 Login Dashboard</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; color: #7f8c8d; margin-bottom: 2rem;'>SCOPE: Safety and Compliance Observation for Protection Equipment</p>", unsafe_allow_html=True)
     
-    # Removed the login-box div wrapper
-    
     with st.form("login_form"):
         username = st.text_input("👤 Username", placeholder="Masukkan username")
         password = st.text_input("🔑 Password", type="password", placeholder="Masukkan password")
+        remember_me = st.checkbox("🔒 Ingat saya", value=True)
         submit = st.form_submit_button("🚀 Login")
         
         if submit:
             if username and password:
-                if login(username, password):
+                if login(username, password, remember_me):
                     st.success("✅ Login berhasil!")
                     st.rerun()
                 else:
@@ -102,9 +117,9 @@ if not st.session_state.logged_in:
     st.markdown("---")
     st.info("**Demo:** Username: `admin` / Password: `admin123`")
     
-    st.stop()  # Stop execution here if not logged in
+    st.stop()
 
-# ===== MAIN DASHBOARD (Only shown after login) =====
+# ===== MAIN DASHBOARD =====
 
 # Custom CSS
 st.markdown("""
