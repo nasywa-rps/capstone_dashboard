@@ -18,11 +18,8 @@ st.set_page_config(
 )
 
 # ===== COOKIE MANAGER FOR PERSISTENT LOGIN =====
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+# Initialize cookie manager (do NOT cache this as it's a widget)
+cookie_manager = stx.CookieManager()
 
 # ===== LOGIN SYSTEM WITH COOKIES =====
 def hash_password(password):
