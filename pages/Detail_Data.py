@@ -119,7 +119,7 @@ def init_blob_client():
 
 
 @st.cache_data(ttl=30)
-def get_all_records(status_filter="Semua", date_filter=None):
+def get_all_records(status_filter="Semua", date_filter=None, limit=100):
     """Fetch all records with filters"""
     client = init_connection()
     collection = client["image_database"]["image_metadata"]
@@ -139,17 +139,18 @@ def get_all_records(status_filter="Semua", date_filter=None):
         end_date = datetime.datetime.combine(date_filter, datetime.time.max)
         query["uploaded_at"] = {"$gte": start_date, "$lte": end_date}
     
-    # Fetch data WITHOUT sorting (CosmosDB requires index for sort)
-    records = list(collection.find(query).limit(500))
+    # Fetch ALL records first, then sort in Python
+    records = list(collection.find(query))
     
-    # Sort in Python by uploaded_at
+    # Sort in Python by uploaded_at (newest first)
     records_sorted = sorted(
         records, 
         key=lambda x: x.get('uploaded_at', datetime.datetime.min),
         reverse=True
     )
     
-    return records_sorted
+    # Apply limit after sorting to get newest records
+    return records_sorted[:limit]
 
 
 def load_image_from_blob(blob_url):
@@ -183,26 +184,40 @@ def load_image_from_blob(blob_url):
 
 # ===== FILTERS =====
 with st.expander("🔍 Filter Data", expanded=True):
-  col_filter1, col_filter2, col_filter3 = st.columns([2, 2, 1])
+    col_filter1, col_filter2, col_filter3 = st.columns([2, 2, 1])
 
-with col_filter1:
-    status_filter = st.selectbox(
-        "Status Kepatuhan",
-        ["Semua", "Patuh (Pakai Helm)", "Melanggar (Tidak Pakai Helm)"],
-        index=0
-    )
+    with col_filter1:
+        status_filter = st.selectbox(
+            "Status Kepatuhan",
+            ["Semua", "Patuh (Pakai Helm)", "Melanggar (Tidak Pakai Helm)"],
+            index=0
+        )
 
-with col_filter2:
-    date_filter = st.date_input(
-        "Filter Tanggal",
-        value=None,
-        help="Kosongkan untuk melihat semua tanggal"
-    )
+    with col_filter2:
+        date_filter = st.date_input(
+            "Filter Tanggal",
+            value=None,
+            help="Kosongkan untuk melihat semua tanggal"
+        )
 
-with col_filter3:
-    if st.button("🔄 Refresh Data", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+    with col_filter3:
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+    # Add limit selector and pagination
+    col_limit1, col_limit2, col_limit3 = st.columns([1, 2, 2])
+    with col_limit1:
+        limit_options = [50, 100, 200, 500, 1000]
+        data_limit = st.selectbox(
+            "Jumlah data per halaman:",
+            options=limit_options,
+            index=1,  # Default to 100
+        )
+    
+    # Initialize page number in session state
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = 1
 
 st.markdown("---")
 
@@ -212,7 +227,8 @@ try:
     # Fetch data
     records = get_all_records(
         status_filter=status_filter,
-        date_filter=date_filter if date_filter else None
+        date_filter=date_filter if date_filter else None,
+        limit=data_limit
     )
     
     if len(records) > 0:
