@@ -239,21 +239,35 @@ def get_database_stats():
         'no_helmet': result['no_helmet'][0]['count'] if result['no_helmet'] else 0
     }
 
+def ensure_indexes():
+    client = init_connection()
+    collection = client["image_database"]["image_metadata"]
+
+    # Cek semua index existing
+    existing_indexes = collection.index_information()
+
+    # Jika belum ada index untuk uploaded_at → buat
+    if not any("uploaded_at" in idx["key"][0][0] for idx in existing_indexes.values()):
+        print("🔧 Creating index for uploaded_at...")
+        collection.create_index([("uploaded_at", -1)])
+        print("✅ Index created successfully!")
+    else:
+        print("ℹ️ Index for uploaded_at already exists.")
+
 @st.cache_data(ttl=60)
+
 def get_recent_records():
     """Fetch 10 most recent records regardless of status"""
     client = init_connection()
     collection = client["image_database"]["image_metadata"]
-    
-    recent_records = list(collection.find({}).limit(50))
-    
-    records_sorted = sorted(
-        recent_records, 
-        key=lambda x: x.get('uploaded_at', datetime.datetime.min),
-        reverse=True
+
+    return list(
+        collection.find({})
+        .sort("uploaded_at", -1)   # sort DESC
+        .limit(10)
     )
-    
-    return records_sorted[:10]
+
+ensure_indexes()
 
 # ===== MAIN DASHBOARD =====
 try:
