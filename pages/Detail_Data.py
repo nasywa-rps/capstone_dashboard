@@ -117,41 +117,40 @@ def init_blob_client():
         st.secrets["AZURE_STORAGE_CONNECTION_STRING"]
     )
 
-
 @st.cache_data(ttl=30)
-def get_all_records(status_filter="Semua", date_filter=None, limit=100):
-    """Fetch all records with filters"""
+def get_all_records(status_filter="Semua", date_filter=None, page=1, page_size=100):
     client = init_connection()
     collection = client["image_database"]["image_metadata"]
-    
-    # Build query
+
     query = {}
-    
+
     # Status filter
     if status_filter == "Patuh (Pakai Helm)":
         query["helmet_status"] = {"$in": ["helmet", "compliant"]}
     elif status_filter == "Melanggar (Tidak Pakai Helm)":
         query["helmet_status"] = {"$in": ["no_helmet", "violation"]}
-    
+
     # Date filter
     if date_filter:
         start_date = datetime.datetime.combine(date_filter, datetime.time.min)
         end_date = datetime.datetime.combine(date_filter, datetime.time.max)
         query["uploaded_at"] = {"$gte": start_date, "$lte": end_date}
-    
-    # Fetch ALL records first, then sort in Python
-    records = list(collection.find(query))
-    
-    # Sort in Python by uploaded_at (newest first)
-    records_sorted = sorted(
-        records, 
-        key=lambda x: x.get('uploaded_at', datetime.datetime.min),
-        reverse=True
-    )
-    
-    # Apply limit after sorting to get newest records
-    return records_sorted[:limit]
 
+    # Pagination
+    skip = (page - 1) * page_size
+
+    # Get total count
+    total_count = collection.count_documents(query)
+
+    # Fetch paginated data
+    records = list(
+        collection.find(query)
+        .sort("uploaded_at", -1)
+        .skip(skip)
+        .limit(page_size)
+    )
+
+    return records, total_count
 
 def load_image_from_blob(blob_url):
     """Load image from Azure Blob Storage with authentication"""
@@ -219,16 +218,19 @@ with st.expander("🔍 Filter Data", expanded=True):
     if 'current_page' not in st.session_state:
         st.session_state.current_page = 1
 
+    page_size = data_limit  # dari selectbox "Jumlah data per halaman"
+
 st.markdown("---")
 
 
 # ===== MAIN LAYOUT: TABLE (3/4) + DETAIL PANEL (1/4) =====
 try:
     # Fetch data
-    records = get_all_records(
+    records, total_count = get_all_records(
         status_filter=status_filter,
         date_filter=date_filter if date_filter else None,
-        limit=data_limit
+        page=st.session_state.current_page,
+        page_size=data_limit
     )
     
     if len(records) > 0:
@@ -236,7 +238,8 @@ try:
         df = pd.DataFrame(records)
         
         # Prepare display columns
-        df['No'] = range(1, len(df) + 1)
+        offset = (st.session_state.current_page - 1) * data_limit
+        df['No'] = range(offset + 1, offset + len(df) + 1)
         
         # Format datetime
         if 'uploaded_at' in df.columns:
@@ -283,6 +286,24 @@ try:
             if selected_indices and len(selected_indices['selection']['rows']) > 0:
                 selected_idx = selected_indices['selection']['rows'][0]
                 st.session_state['selected_record'] = records[selected_idx]
+        
+        total_pages = (total_count + data_limit - 1) // data_limit
+        col_p1, col_p2, col_p3 = st.columns([1,2,1])
+
+        with col_p1:
+            if st.session_state.current_page > 1:
+                if st.button("⬅️ Previous"):
+                    st.session_state.current_page -= 1
+                    st.rerun()
+
+        with col_p3:
+            if st.session_state.current_page < total_pages:
+                if st.button("Next ➡️"):
+                    st.session_state.current_page += 1
+                    st.rerun()
+
+        st.write(f"Page **{st.session_state.current_page}** of **{total_pages}**")
+
         
         with col_detail:
             st.subheader("🔍 Detail Informasi")
