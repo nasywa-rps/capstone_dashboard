@@ -311,18 +311,60 @@ try:
             if 'selected_record' in st.session_state and st.session_state['selected_record']:
                 record = st.session_state['selected_record']
                 
-                # Display image with authenticated access
-                if 'url' in record or 'blob_url' in record:
-                    img_url = record.get('url') or record.get('blob_url')
+                # IMAGE NAVIGATION - Original and Annotated
+                img_url = record.get('url') or record.get('blob_url')
+                annotated_url = record.get('annotated_url')
+                
+                if img_url:
+                    # Initialize image index in session state
+                    img_key = f"img_idx_{record.get('_id')}"
+                    if img_key not in st.session_state:
+                        st.session_state[img_key] = 0
                     
+                    # Load images
                     with st.spinner('Memuat gambar...'):
-                        img = load_image_from_blob(img_url)
-                        if img:
-                            st.image(img, use_container_width=True)
+                        original_img = load_image_from_blob(img_url)
+                        annotated_img = None
+                        
+                        if annotated_url:
+                            annotated_img = load_image_from_blob(annotated_url)
+                    
+                    # Display current image (NO CAPTION)
+                    if st.session_state[img_key] == 0:
+                        if original_img:
+                            st.image(original_img, use_container_width=True)
                         else:
                             st.warning("⚠️ Gambar tidak dapat dimuat")
+                    else:
+                        if annotated_img:
+                            st.image(annotated_img, use_container_width=True)
+                        else:
+                            st.info("ℹ️ Gambar deteksi belum tersedia")
+                            if original_img:
+                                st.image(original_img, use_container_width=True)
+                    
+                    # Navigation buttons UNDER image - Toggle functionality
+                    col_prev, col_indicator, col_next = st.columns([1, 2, 1])
+                    
+                    with col_prev:
+                        if st.button("⬅️ Prev", key=f"prev_{record.get('_id')}", use_container_width=True):
+                            # Toggle: flip to the other image
+                            st.session_state[img_key] = 1 - st.session_state[img_key]
+                            st.rerun()
+                    
+                    with col_indicator:
+                        if st.session_state[img_key] == 0:
+                            st.markdown("<center>📷 <b>Original</b></center>", unsafe_allow_html=True)
+                        else:
+                            st.markdown("<center>🎯 <b>Detection</b></center>", unsafe_allow_html=True)
+                    
+                    with col_next:
+                        if st.button("Next ➡️", key=f"next_{record.get('_id')}", use_container_width=True):
+                            # Toggle: flip to the other image
+                            st.session_state[img_key] = 1 - st.session_state[img_key]
+                            st.rerun()
                 
-                # Status
+                # Status badge
                 status = record.get('helmet_status', 'unknown')
                 if status in ['helmet', 'compliant']:
                     st.markdown('<div class="status-compliant">✅ PATUH</div>', unsafe_allow_html=True)
@@ -343,17 +385,16 @@ try:
                 else:
                     st.text('N/A')
                 
+                st.markdown(f"**👥 Jumlah Orang:**")
+                st.text(record.get('person_count', 'N/A'))
+                
+                st.markdown(f"**🪖 Jumlah Helm:**")
+                st.text(record.get('helmet_count', 'N/A'))
+                
                 st.markdown(f"**🎯 Confidence Rate:**")
                 confidence = record.get('confidence', None)
                 if confidence is not None:
                     st.text(f"{confidence*100:.1f}%")
-                else:
-                    st.text('N/A')
-                
-                st.markdown(f"**🔗 URL Gambar:**")
-                img_url = record.get('url') or record.get('blob_url', 'N/A')
-                if img_url != 'N/A':
-                    st.text_input("", img_url, label_visibility="collapsed", disabled=True)
                 else:
                     st.text('N/A')
                 
@@ -362,7 +403,7 @@ try:
             
             else:
                 st.info("👈 Pilih baris dari tabel untuk melihat detail")
-    
+
     else:
         st.warning("⚠️ Tidak ada data yang sesuai dengan filter")
         st.info("Coba ubah filter atau refresh data")
