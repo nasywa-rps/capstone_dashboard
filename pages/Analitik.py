@@ -199,7 +199,11 @@ try:
         df_violators = pd.DataFrame(violators)
         
         if 'processed_at' in df_violators.columns:
-            df_violators['processed_at'] = pd.to_datetime(df_violators['processed_at'])
+            df_violators['processed_at'] = pd.to_datetime(
+                df_violators['processed_at'],
+                format="ISO8601",
+                errors="coerce"
+            )
             df_violators['date'] = df_violators['processed_at'].dt.date
             df_violators['hour'] = df_violators['processed_at'].dt.hour
             
